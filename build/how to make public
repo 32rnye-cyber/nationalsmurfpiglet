@@ -1,0 +1,1 @@
+$env:PYTHONHTTPSVERIFY=0; python -u -m pygbag .
