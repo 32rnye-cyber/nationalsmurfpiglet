@@ -1,0 +1,309 @@
+import pygame
+import random
+import math
+import sys
+
+# =============================================================================
+# 1. ENGINE CORE REGISTRY & CONSTANTS
+# =============================================================================
+WIDTH, HEIGHT = 1024, 768
+FPS = 60
+BUSH_COUNT = 24
+BOOM_SPEED_BASE = 20
+BOOM_RETURN_FORCE = 1.15
+BOOM_DRAG = 0.89
+POWERUP_SPAWN_RATE = 0.012
+
+# Colors & Aesthetics
+CLR_GRASS = (20, 100, 20)
+CLR_BUSH = (0, 25, 0)
+CLR_WHITE = (240, 240, 240)
+CLR_FIRE = (255, 30, 0)
+CLR_ICE = (0, 230, 255)
+CLR_OMEGA = (200, 0, 255) 
+
+# Input Controller Mappings [Up, Down, Left, Right, Shoot]
+P1_KEYS = [pygame.K_w, pygame.K_s, pygame.K_a, pygame.K_d, pygame.K_SPACE]
+P2_KEYS = [pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT, pygame.K_RETURN]
+P3_KEYS = [pygame.K_i, pygame.K_k, pygame.K_j, pygame.K_l, pygame.K_h]
+
+# =============================================================================
+# 2. GLOBAL SYSTEM MANAGERS
+# =============================================================================
+class CameraSystem:
+    def __init__(self):
+        self.shake_mag = 0
+        self.flash_alpha = 0
+    def trigger_hit(self):
+        self.shake_mag = 22
+        self.flash_alpha = 200
+    def update(self):
+        if self.shake_mag > 0: self.shake_mag -= 1
+        if self.flash_alpha > 0: self.flash_alpha -= 15
+    def get_offset(self):
+        if self.shake_mag > 0:
+            return (random.randint(-self.shake_mag, self.shake_mag), 
+                    random.randint(-self.shake_mag, self.shake_mag))
+        return (0, 0)
+
+class Particle(pygame.sprite.Sprite):
+    def __init__(self, pos, color):
+        super().__init__()
+        s = random.randint(4, 12)
+        self.image = pygame.Surface((s, s))
+        self.image.fill(color)
+        self.rect = self.image.get_rect(center=pos)
+        self.pos = pygame.math.Vector2(pos)
+        self.vel = pygame.math.Vector2(random.uniform(-8, 8), random.uniform(-8, 8))
+        self.life = 255
+    def update(self, *args):
+        self.pos += self.vel
+        self.rect.center = self.pos
+        self.life -= 12
+        self.image.set_alpha(max(0, self.life))
+        if self.life <= 0: self.kill()
+
+class HazardTrail(pygame.sprite.Sprite):
+    def __init__(self, pos, color, mode, owner):
+        super().__init__()
+        self.mode = mode
+        self.owner = owner
+        self.image = pygame.Surface((40, 40), pygame.SRCALPHA)
+        pygame.draw.circle(self.image, (*color, 160), (20, 20), 18)
+        self.rect = self.image.get_rect(center=pos)
+        self.life = 100
+    def update(self, *args):
+        self.life -= 3
+        if self.life <= 0: self.kill()
+        self.image.set_alpha(int((max(0, self.life) / 100) * 160))
+
+# =============================================================================
+# 3. GAME ENTITIES
+# =============================================================================
+class Boomerang(pygame.sprite.Sprite):
+    def __init__(self, pos, vel, owner, color, mods):
+        super().__init__()
+        self.image = pygame.Surface((50, 50), pygame.SRCALPHA)
+        self.owner, self.color, self.mods = owner, color, mods
+        self.pos, self.vel = pygame.math.Vector2(pos), vel
+        self.state, self.angle = "OUT", 0
+        self.rect = self.image.get_rect(center=pos)
+
+    def update(self, trails, bushes):
+        self.angle += 55
+        self.image.fill((0, 0, 0, 0))
+        p = [(25, 2), (48, 48), (25, 32), (2, 48)]
+        rot = [(pygame.math.Vector2(pt)-(25,25)).rotate(self.angle)+(25,25) for pt in p]
+        pygame.draw.polygon(self.image, CLR_WHITE, rot)
+        pygame.draw.polygon(self.image, self.color, rot, 9)
+
+        if "FIRE" in self.mods: trails.add(HazardTrail(self.pos, CLR_FIRE, "FIRE", self.owner))
+        if "ICE" in self.mods: trails.add(HazardTrail(self.pos, CLR_ICE, "ICE", self.owner))
+
+        if self.state == "OUT":
+            self.vel *= BOOM_DRAG
+            if self.vel.length() < 3.2: self.state = "RETURN"
+        else:
+            target = (self.owner.pos - self.pos)
+            if target.length() > 0: self.vel += target.normalize() * BOOM_RETURN_FORCE
+        
+        self.pos += self.vel
+        self.rect.center = self.pos
+        if pygame.sprite.spritecollide(self, bushes, False):
+            self.state, self.vel = "RETURN", self.vel * -0.8
+        if self.state == "RETURN" and self.rect.colliderect(self.owner.rect):
+            self.owner.active_booms -= 1
+            self.kill()
+
+class Actor(pygame.sprite.Sprite):
+    def __init__(self, x, y, color, is_cpu, keys):
+        super().__init__()
+        self.color, self.is_cpu, self.keys = color, is_cpu, keys
+        self.image = pygame.Surface((64, 64), pygame.SRCALPHA)
+        self.rect = self.image.get_rect(center=(x, y))
+        self.pos, self.last_dir = pygame.math.Vector2(x, y), pygame.math.Vector2(1, 0)
+        self.active_booms, self.powers = 0, set()
+        self.slow_timer = 0
+
+    def update(self, keys_pressed, boomerangs):
+        move = pygame.math.Vector2(0, 0)
+        speed = 7.8 * (0.35 if self.slow_timer > 0 else 1.0)
+        if self.slow_timer > 0: self.slow_timer -= 1
+
+        if self.is_cpu:
+            if random.random() < 0.02: self.last_dir = pygame.math.Vector2(random.uniform(-1,1), random.uniform(-1,1)).normalize()
+            move = self.last_dir
+            if random.random() < 0.012: self.shoot(boomerangs)
+        else:
+            if keys_pressed[self.keys[0]]: move.y -= 1
+            if keys_pressed[self.keys[1]]: move.y += 1
+            if keys_pressed[self.keys[2]]: move.x -= 1
+            if keys_pressed[self.keys[3]]: move.x += 1
+
+        if move.length() > 0:
+            move = move.normalize()
+            self.last_dir = move
+            self.pos += move * speed
+        
+        self.pos.x = max(32, min(WIDTH-32, self.pos.x))
+        self.pos.y = max(32, min(HEIGHT-32, self.pos.y))
+        self.rect.center = self.pos
+        self.draw_char()
+
+    def draw_char(self):
+        self.image.fill((0,0,0,0))
+        pygame.draw.circle(self.image, self.color, (32, 32), 28)
+        pygame.draw.circle(self.image, CLR_WHITE, (32, 32), 28, 6)
+        if "MULTI" in self.powers: pygame.draw.circle(self.image, CLR_OMEGA, (32, 32), 14)
+
+    def shoot(self, group):
+        if "MULTI" in self.powers:
+            for i in range(8):
+                v = pygame.math.Vector2(BOOM_SPEED_BASE, 0).rotate(i * 45)
+                group.add(Boomerang(self.rect.center, v, self, self.color, list(self.powers)))
+                self.active_booms += 1
+        elif self.active_booms < 1:
+            group.add(Boomerang(self.rect.center, self.last_dir * BOOM_SPEED_BASE, self, self.color, list(self.powers)))
+            self.active_booms += 1
+
+class PowerUp(pygame.sprite.Sprite):
+    def __init__(self, x, y):
+        super().__init__()
+        self.type = random.choice(["FIRE", "ICE", "MULTI"])
+        self.color = CLR_FIRE if self.type == "FIRE" else CLR_ICE if self.type == "ICE" else CLR_OMEGA
+        self.image = pygame.Surface((48, 48), pygame.SRCALPHA)
+        pygame.draw.circle(self.image, self.color, (24, 24), 22)
+        pygame.draw.circle(self.image, CLR_WHITE, (24, 24), 22, 5)
+        self.rect = self.image.get_rect(center=(x, y))
+        self.s = 0
+    def update(self, *args):
+        self.s += 0.2; self.rect.y += math.sin(self.s) * 2
+
+# =============================================================================
+# 4. GAME ENGINE
+# =============================================================================
+class GameEngine:
+    def __init__(self):
+        pygame.init()
+        self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
+        pygame.display.set_caption("Snack Fu: Arena")
+        self.clock = pygame.time.Clock()
+        self.cam = CameraSystem()
+        self.font = pygame.font.SysFont("Impact", 60)
+        self.small_font = pygame.font.SysFont("Impact", 35)
+        self.state = "MENU"
+        self.mode = "SINGLE" 
+        self.reset_session()
+
+    def reset_session(self):
+        self.bushes = pygame.sprite.Group()
+        self.trails = pygame.sprite.Group()
+        self.booms = pygame.sprite.Group()
+        self.fx = pygame.sprite.Group()
+        self.items = pygame.sprite.Group()
+        self.actors = pygame.sprite.Group()
+
+        for _ in range(BUSH_COUNT):
+            b = pygame.sprite.Sprite()
+            b.image = pygame.Surface((random.randint(60, 120), random.randint(60, 120)))
+            b.image.fill(CLR_BUSH)
+            b.rect = b.image.get_rect(center=(random.randint(100, WIDTH-100), random.randint(100, HEIGHT-100)))
+            self.bushes.add(b)
+
+        p1 = Actor(100, 100, (50, 50, 255), False, P1_KEYS)
+        if self.mode == "SINGLE":
+            p2 = Actor(WIDTH-100, HEIGHT-100, (255, 50, 50), True, P2_KEYS)
+        else:
+            p2 = Actor(WIDTH-100, HEIGHT-100, (255, 50, 50), False, P2_KEYS)
+            
+        p3 = Actor(WIDTH-100, 100, (50, 255, 50), True, P3_KEYS) 
+        
+        self.players = [p1, p2, p3]
+        for p in self.players:
+            self.actors.add(p)
+
+    def handle_collisions(self):
+        for b in self.booms:
+            hits = pygame.sprite.spritecollide(b, self.actors, False)
+            for victim in hits:
+                if victim != b.owner:
+                    for _ in range(15): self.fx.add(Particle(victim.rect.center, victim.color))
+                    self.cam.trigger_hit()
+                    victim.kill()
+                    if len(self.actors) <= 1: self.state = "GAMEOVER"
+
+        for trail in self.trails:
+            hits = pygame.sprite.spritecollide(trail, self.actors, False)
+            for victim in hits:
+                if victim != trail.owner:
+                    if trail.mode == "FIRE":
+                        victim.kill()
+                        if len(self.actors) <= 1: self.state = "GAMEOVER"
+                    elif trail.mode == "ICE":
+                        victim.slow_timer = 40
+
+        for p in self.actors:
+            hits = pygame.sprite.spritecollide(p, self.items, True)
+            for item in hits:
+                p.powers.add(item.type)
+
+    def run(self):
+        while True:
+            keys = pygame.key.get_pressed()
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT: pygame.quit(); sys.exit()
+                
+                if event.type == pygame.KEYDOWN:
+                    if self.state == "MENU":
+                        if event.key == pygame.K_1:
+                            self.mode = "SINGLE"; self.reset_session(); self.state = "PLAY"
+                        elif event.key == pygame.K_2:
+                            self.mode = "MULTI"; self.reset_session(); self.state = "PLAY"
+                            
+                    elif self.state == "GAMEOVER":
+                        self.state = "MENU"
+                    else:
+                        for p in self.players:
+                            if p.alive() and not p.is_cpu and event.key == p.keys[4]: 
+                                p.shoot(self.booms)
+
+            if self.state == "PLAY":
+                if random.random() < POWERUP_SPAWN_RATE:
+                    self.items.add(PowerUp(random.randint(50, WIDTH-50), random.randint(50, HEIGHT-50)))
+                self.cam.update()
+                self.actors.update(keys, self.booms)
+                self.booms.update(self.trails, self.bushes)
+                self.trails.update()
+                self.items.update()
+                self.fx.update()
+                self.handle_collisions()
+
+            offset = self.cam.get_offset()
+            self.screen.fill(CLR_GRASS)
+            for g in [self.bushes, self.items, self.trails, self.booms, self.actors, self.fx]:
+                for sprite in g:
+                    self.screen.blit(sprite.image, (sprite.rect.x + offset[0], sprite.rect.y + offset[1]))
+
+            if self.cam.flash_alpha > 0:
+                s = pygame.Surface((WIDTH, HEIGHT))
+                s.fill((255, 255, 255)); s.set_alpha(self.cam.flash_alpha)
+                self.screen.blit(s, (0,0))
+
+            if self.state == "MENU":
+                title = self.font.render("SNACK FU", True, CLR_WHITE)
+                opt1 = self.small_font.render("Press 1: Single Player (vs CPUs)", True, CLR_WHITE)
+                opt2 = self.small_font.render("Press 2: Multiplayer (P1 vs P2)", True, CLR_WHITE)
+                self.screen.blit(title, (WIDTH//2 - title.get_width()//2, HEIGHT//2 - 100))
+                self.screen.blit(opt1, (WIDTH//2 - opt1.get_width()//2, HEIGHT//2))
+                self.screen.blit(opt2, (WIDTH//2 - opt2.get_width()//2, HEIGHT//2 + 50))
+            
+            elif self.state == "GAMEOVER":
+                txt = self.font.render("MATCH OVER! PRESS ANY KEY", True, CLR_WHITE)
+                self.screen.blit(txt, (WIDTH//2 - txt.get_width()//2, HEIGHT//2))
+
+            pygame.display.flip()
+            self.clock.tick(FPS)
+
+if __name__ == "__main__":
+    game = GameEngine()
+    game.run()

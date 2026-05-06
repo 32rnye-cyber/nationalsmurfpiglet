@@ -1,0 +1,185 @@
+import pygame
+import sys
+import random
+import math
+
+# --- INITIALIZATION ---
+pygame.init()
+WIDTH, HEIGHT = 1280, 720
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("Last Kids on Earth: Scrapken Brawler Fix")
+clock = pygame.time.Clock()
+font = pygame.font.SysFont("Arial", 40, True)
+
+def create_assets():
+    bg = pygame.Surface((WIDTH, HEIGHT))
+    bg.fill((100, 170, 230)) # Bright Day
+    for i in range(8):
+        h = random.randint(150, 450)
+        pygame.draw.rect(bg, (85, 90, 105), (i*180, 600-h, 120, h))
+    pygame.draw.rect(bg, (70, 50, 30), (500, 150, 150, 450)) # Trunk
+    pygame.draw.rect(bg, (100, 80, 50), (430, 150, 300, 180), border_radius=5) # Treehouse
+    pygame.draw.rect(bg, (50, 140, 50), (0, 600, WIDTH, 120)) # Ground
+    
+    # Jack
+    jack = pygame.Surface((80, 120), pygame.SRCALPHA)
+    pygame.draw.ellipse(jack, (224, 172, 105), (25, 0, 30, 30))
+    pygame.draw.rect(jack, (0, 100, 240), (15, 30, 50, 60), border_radius=10)
+    pygame.draw.rect(jack, (40, 40, 40), (15, 90, 50, 30))
+    
+    # Bat
+    bat = pygame.Surface((100, 20), pygame.SRCALPHA)
+    pygame.draw.rect(bat, (190, 190, 190), (0, 5, 100, 12), border_radius=5)
+    return bg, jack, bat
+
+background, jack_img, slicer_img = create_assets()
+
+class Jack:
+    def __init__(self):
+        self.rect = pygame.Rect(100, 480, 80, 120)
+        self.pos = pygame.math.Vector2(self.rect.center)
+        self.vel = pygame.math.Vector2(0, 0)
+        self.health = 100
+        self.is_swinging = False
+        self.swing_timer = 0
+
+    def update(self):
+        keys = pygame.key.get_pressed()
+        self.vel.x = (keys[pygame.K_d] - keys[pygame.K_a]) * 12
+        if keys[pygame.K_w] and self.rect.bottom >= 600: self.vel.y = -22
+        
+        self.vel.y += 1.0 # Gravity
+        self.pos += self.vel
+        
+        # Boundary Fix: Jack can now reach the Boss!
+        if self.pos.y > 540: self.pos.y, self.vel.y = 540, 0
+        if self.pos.x < 40: self.pos.x = 40
+        if self.pos.x > 1200: self.pos.x = 1200 
+        
+        self.rect.center = self.pos
+
+        if keys[pygame.K_e] and not self.is_swinging: 
+            self.is_swinging, self.swing_timer = True, 12
+        if self.is_swinging:
+            self.swing_timer -= 1
+            if self.swing_timer <= 0: self.is_swinging = False
+
+    def draw(self, surface):
+        surface.blit(jack_img, self.rect)
+        if self.is_swinging:
+            # The bat hitbox is now slightly larger to make hitting the boss easier
+            b_rect = slicer_img.get_rect(midleft=self.rect.midright)
+            surface.blit(slicer_img, b_rect)
+            return b_rect
+        return None
+
+class MultiTentacle:
+    def __init__(self, index):
+        self.index = index
+        self.state = "SQUIRM"
+        self.timer = random.randint(30, 120)
+        self.type = index % 4 
+        self.length = 0
+        self.rect = pygame.Rect(0,0,0,0)
+
+    def update(self):
+        if self.state == "SQUIRM":
+            self.timer -= 1
+            self.length = math.sin(pygame.time.get_ticks() * 0.005 + self.index) * 40
+            if self.timer <= 0: self.state, self.timer = "LUNGE", 25
+        elif self.state == "LUNGE":
+            self.length += 100 
+            self.timer -= 1
+            if self.timer <= 0: self.state, self.timer = "SQUIRM", random.randint(50, 150)
+
+    def draw(self, surface, bx, by):
+        start_pos = pygame.math.Vector2(bx + 100, by + 350)
+        
+        if self.type == 0: end_pos = start_pos + (-300 - self.length, 0)
+        elif self.type == 1: end_pos = start_pos + (-250 - self.length, 150 + self.length/2)
+        elif self.type == 2: end_pos = start_pos + (-250 - self.length, -150 - self.length/2)
+        else: end_pos = start_pos + (self.index*15-60, 200 + self.length)
+
+        color = (100, 40, 130) if self.state == "LUNGE" else (55, 30, 70)
+        pygame.draw.line(surface, color, start_pos, end_pos, 25)
+        pygame.draw.circle(surface, (255,0,0), (int(end_pos.x), int(end_pos.y)), 10) 
+        
+        # Smaller tentacle hitboxes so Jack can walk past them easier
+        self.rect = pygame.Rect(0,0,40,40)
+        self.rect.center = (int(end_pos.x), int(end_pos.y))
+        return self.rect
+
+class Scrapken:
+    def __init__(self):
+        # Positioned closer to center (x=750) so Jack can walk to it
+        self.rect = pygame.Rect(750, 100, 450, 500) 
+        self.hp = 4000
+        self.shake = 0
+        self.flash = 0
+        self.arms = [MultiTentacle(i) for i in range(8)]
+
+    def update(self):
+        if self.shake > 0: self.shake -= 1
+        if self.flash > 0: self.flash -= 1
+        for arm in self.arms: arm.update()
+
+    def draw(self, surface):
+        sx = random.randint(-self.shake, self.shake)
+        bx, by = self.rect.x + sx, self.rect.y
+        
+        hitboxes = [arm.draw(surface, bx, by) for arm in self.arms]
+
+        # Flash white when hit
+        body_color = (200, 200, 200) if self.flash > 0 else (50, 50, 60)
+        pygame.draw.ellipse(surface, body_color, (bx, by, 450, 480))
+        
+        # 5 EYES
+        for ex, ey in [(bx+150, by+150), (bx+300, by+150), (bx+225, by+90), (bx+180, by+220), (bx+270, by+220)]:
+            pygame.draw.circle(surface, (255, 0, 0), (ex, ey), 18)
+            pygame.draw.circle(surface, (255, 255, 255), (ex-5, ey-5), 5)
+            
+        pygame.draw.polygon(surface, (15, 10, 10), [(bx+140, by+300), (bx+310, by+300), (bx+225, by+440)])
+        return hitboxes
+
+jack, boss = Jack(), Scrapken()
+game_over, msg = False, ""
+
+while True:
+    screen.blit(background, (0, 0))
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT: pygame.quit(); sys.exit()
+
+    if not game_over:
+        jack.update()
+        boss.update()
+        
+        b_hb = jack.draw(screen)
+        a_hbs = boss.draw(screen)
+
+        # Jack attacks Boss - Body Collision
+        if b_hb and b_hb.colliderect(boss.rect):
+            boss.hp -= 40
+            boss.shake = 25
+            boss.flash = 5 # Visual feedback for hit
+        
+        # Boss hits Jack
+        for hb in a_hbs:
+            if hb.colliderect(jack.rect):
+                jack.health -= 1.5
+                jack.pos.x -= 30 
+                boss.shake = 5
+
+        # UI
+        pygame.draw.rect(screen, (255, 0, 0), (340, 40, (max(0, boss.hp)/4000)*600, 30))
+        pygame.draw.rect(screen, (0, 255, 0), (50, 650, jack.health * 2, 20))
+
+        if boss.hp <= 0: game_over, msg = True, "SCRAPKEN DESTROYED!"
+        if jack.health <= 0: game_over, msg = True, "DEFEAT!"
+    else:
+        overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA); overlay.fill((0, 0, 0, 200))
+        screen.blit(overlay, (0,0))
+        txt = font.render(msg, True, (255, 255, 255))
+        screen.blit(txt, (WIDTH//2 - txt.get_width()//2, HEIGHT//2))
+
+    pygame.display.flip()
+    clock.tick(60)

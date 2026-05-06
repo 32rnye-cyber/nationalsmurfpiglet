@@ -1,0 +1,136 @@
+import pygame
+import math
+import random
+import sys
+
+# --- Initialization ---
+pygame.init()
+WIDTH, HEIGHT = 1000, 600
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("Marvel Showdown: Iron Man vs Captain America")
+clock = pygame.time.Clock()
+font = pygame.font.SysFont("Impact", 30)
+
+# Colors
+RED = (200, 0, 0)
+BLUE = (0, 0, 200)
+GOLD = (255, 215, 0)
+WHITE = (255, 255, 255)
+BLACK = (20, 20, 20)
+
+# --- Classes ---
+class Projectile(pygame.sprite.Sprite):
+    def __init__(self, x, y, direction, color):
+        super().__init__()
+        self.image = pygame.Surface((15, 10))
+        self.image.fill(color)
+        self.rect = self.image.get_rect(center=(x, y))
+        self.speed = 12 * direction
+
+    def update(self):
+        self.rect.x += self.speed
+        if self.rect.right < 0 or self.rect.left > WIDTH:
+            self.kill()
+
+class Hero(pygame.sprite.Sprite):
+    def __init__(self, name, x, y, color):
+        super().__init__()
+        self.name = name
+        self.image = pygame.Surface((50, 80))
+        self.image.fill(color)
+        self.rect = self.image.get_rect(center=(x, y))
+        self.hp = 100
+        self.cooldown = 0
+
+    def draw_hp(self, x, y):
+        pygame.draw.rect(screen, (50, 50, 50), (x, y, 200, 20))
+        pygame.draw.rect(screen, (0, 255, 0), (x, y, self.hp * 2, 20))
+        lbl = font.render(self.name, True, WHITE)
+        screen.blit(lbl, (x, y - 35))
+
+class Player(Hero):
+    def update(self):
+        keys = pygame.key.get_pressed()
+        if keys[pygame.K_w] and self.rect.top > 0: self.rect.y -= 7
+        if keys[pygame.K_s] and self.rect.bottom < HEIGHT: self.rect.y += 7
+        if keys[pygame.K_a] and self.rect.left > 0: self.rect.x -= 7
+        if keys[pygame.K_d] and self.rect.right < WIDTH: self.rect.x += 7
+        if self.cooldown > 0: self.cooldown -= 1
+
+class Enemy(Hero):
+    def update(self, player_pos):
+        # CPU Intelligence: Chase player vertically
+        if self.rect.centery < player_pos.y: self.rect.y += 4
+        else: self.rect.y -= 4
+        
+        # Keep distance horizontally
+        if self.rect.centerx > 700: self.rect.x -= 2
+        
+        if self.cooldown > 0: self.cooldown -= 1
+
+# --- Setup ---
+ironman = Player("IRON MAN", 150, 300, RED)
+cap = Enemy("CAPTAIN AMERICA", 850, 300, BLUE)
+
+all_sprites = pygame.sprite.Group(ironman, cap)
+player_bullets = pygame.sprite.Group()
+enemy_bullets = pygame.sprite.Group()
+
+# --- Main Loop ---
+running = True
+winner = ""
+
+while running:
+    screen.fill(BLACK)
+    
+    # 1. Events
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT: running = False
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
+            if ironman.cooldown == 0:
+                bullet = Projectile(ironman.rect.right, ironman.rect.centery, 1, GOLD)
+                player_bullets.add(bullet)
+                all_sprites.add(bullet)
+                ironman.cooldown = 15
+
+    if not winner:
+        # 2. CPU Attack Logic (Cap throws shield)
+        if cap.cooldown == 0:
+            shield = Projectile(cap.rect.left, cap.rect.centery, -1, WHITE)
+            enemy_bullets.add(shield)
+            all_sprites.add(shield)
+            cap.cooldown = 40
+
+        # 3. Updates
+        ironman.update()
+        cap.update(ironman.rect)
+        player_bullets.update()
+        enemy_bullets.update()
+
+        # 4. Collision Detection
+        for b in player_bullets:
+            if pygame.sprite.collide_rect(b, cap):
+                cap.hp -= 5
+                b.kill()
+        for b in enemy_bullets:
+            if pygame.sprite.collide_rect(b, ironman):
+                ironman.hp -= 10
+                b.kill()
+
+        # 5. Win Check
+        if cap.hp <= 0: winner = "IRON MAN WINS!"
+        if ironman.hp <= 0: winner = "CAPTAIN AMERICA WINS!"
+
+    # 6. Drawing
+    all_sprites.draw(screen)
+    ironman.draw_hp(50, 50)
+    cap.draw_hp(750, 50)
+
+    if winner:
+        txt = font.render(winner, True, GOLD)
+        screen.blit(txt, (WIDTH//2 - 100, HEIGHT//2))
+
+    pygame.display.flip()
+    clock.tick(60)
+
+pygame.quit()

@@ -1,0 +1,150 @@
+import pygame
+import random
+import sys
+
+# --- Configuration ---
+WIDTH, HEIGHT = 1000, 750
+COLORS = {
+    "bg": (15, 15, 20), "text": (230, 230, 230), "accent": (255, 140, 0),
+    "dead": (80, 80, 80), "box": (35, 35, 45), "district": (100, 200, 255)
+}
+
+TRAITS = ["Strong", "Fast", "Smart", "Stealthy", "Vicious", "Lucky"]
+
+class Tribute:
+    def __init__(self, name, district):
+        self.name = name
+        self.district = district
+        self.trait = random.choice(TRAITS)
+        self.alive = True
+        self.kills = 0
+        self.day_died = 0
+
+class HungerGamesSim:
+    def __init__(self):
+        pygame.init()
+        self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
+        pygame.display.set_caption("Ultimate Hunger Games Simulator")
+        self.clock = pygame.time.Clock()
+        self.font = pygame.font.SysFont("Verdana", 18)
+        self.bold_font = pygame.font.SysFont("Verdana", 22, bold=True)
+        
+        self.tributes = []
+        self.input_text = ""
+        self.state = "INPUT" # INPUT, SIMULATING, WINNER
+        self.log = ["Welcome to the Arena. Add up to 24 Tributes."]
+        self.day = 1
+
+    def simulate_day(self):
+        alive = [t for t in self.tributes if t.alive]
+        if len(alive) <= 1:
+            self.state = "WINNER"
+            return
+
+        # Randomly choose an event type
+        event_roll = random.random()
+        
+        if event_roll < 0.4: # Kill Event
+            p1, p2 = random.sample(alive, 2)
+            # Trait logic: "Strong" or "Vicious" have better odds
+            if p2.trait in ["Strong", "Vicious"] and random.random() < 0.3:
+                p1, p2 = p2, p1 # The intended victim fights back!
+            
+            p2.alive = False
+            p2.day_died = self.day
+            p1.kills += 1
+            death_msgs = [f"⚔️ {p1.name} (D{p1.district}) killed {p2.name} with a spear!",
+                          f"🏹 {p1.name} sniped {p2.name} from a tree.",
+                          f"🔥 {p1.name} trapped {p2.name} in a forest fire."]
+                          
+            self.log.insert(0, random.choice(death_msgs))
+            
+        elif event_roll < 0.6: # Accident/Arena Event
+            p = random.choice(alive)
+            p.alive = False
+            p.day_died = self.day
+            env_msgs = [f"🌩️ {p.name} was struck by lightning!",
+                        f"🍓 {p.name} ate poisonous berries.",
+                        f"🐺 Mutts tracked down and killed {p.name}.",
+                        f" {p.name} died of hunger.", 
+                        f" {p.name} died of thirst.",
+                        f" {p.name} drowned in mud.",
+                        f" {p.name} got stung by tracker jackers and died from halucination.",
+                        f" {p.name} got shot by an arrow.",]
+                        
+                    
+            self.log.insert(0, random.choice(env_msgs))
+            
+        else: # Passive Event
+            p = random.choice(alive)
+            pass_msgs = [f"💧 {p.name} found a stream of fresh water.",
+                         f"⛺ {p.name} received a sponsorship gift!",
+                         f"💤 {p.name} stayed hidden all day." ]
+                         
+            self.log.insert(0, random.choice(pass_msgs))
+        
+        self.day += 1
+
+    def draw(self):
+        self.screen.fill(COLORS["bg"])
+        
+        # Sidebar - Tribute Status
+        pygame.draw.rect(self.screen, COLORS["box"], (10, 10, 380, 730))
+        self.screen.blit(self.bold_font.render("Arena Status", True, COLORS["accent"]), (25, 25))
+        
+        for i, t in enumerate(self.tributes):
+            color = COLORS["text"] if t.alive else COLORS["dead"]
+            y_pos = 65 + (i * 26)
+            status = f"D{t.district} | {t.name} [{t.trait}] - {t.kills} Kills"
+            if not t.alive: status += f" (RIP Day {t.day_died})"
+            self.screen.blit(self.font.render(status, True, color), (25, y_pos))
+
+        # Main Log Area
+        pygame.draw.rect(self.screen, COLORS["box"], (410, 100, 570, 640))
+        for i, entry in enumerate(self.log[:15]):
+            alpha = max(255 - (i * 15), 30)
+            text_surf = self.font.render(entry, True, COLORS["text"])
+            text_surf.set_alpha(alpha)
+            self.screen.blit(text_surf, (430, 120 + i * 40))
+
+        # Input Header
+        if self.state == "INPUT":
+            txt = f"Entering Tribute #{len(self.tributes)+1}: {self.input_text}_"
+            self.screen.blit(self.bold_font.render(txt, True, (255,255,255)), (410, 25))
+            self.screen.blit(self.font.render("Press ENTER to add, BACKSPACE to delete, SPACE to start.", True, (150,150,150)), (410, 60))
+        elif self.state == "WINNER":
+            winner = [t for t in self.tributes if t.alive][0]
+            self.screen.blit(self.bold_font.render(f"👑 VICTOR: {winner.name} from District {winner.district}!", True, COLORS["accent"]), (410, 25))
+        else:
+            self.screen.blit(self.bold_font.render(f"DAY {self.day} - Press SPACE for next event", True, (255,255,255)), (410, 25))
+
+        pygame.display.flip()
+
+    def run(self):
+        while True:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit(); sys.exit()
+                
+                if event.type == pygame.KEYDOWN:
+                    if self.state == "INPUT":
+                        if event.key == pygame.K_RETURN and self.input_text:
+                            dist = (len(self.tributes) // 2) + 1
+                            self.tributes.append(Tribute(self.input_text, dist))
+                            self.input_text = ""
+                        elif event.key == pygame.K_BACKSPACE:
+                            self.input_text = self.input_text[:-1]
+                        elif event.key == pygame.K_SPACE and len(self.tributes) >= 2:
+                            self.state = "SIMULATING"
+                        else:
+                            if event.unicode.isprintable(): self.input_text += event.unicode
+                    
+                    elif event.key == pygame.K_SPACE:
+                        if self.state == "SIMULATING": self.simulate_day()
+                        else: self.__init__() # Reset on game over
+
+            self.draw()
+            self.clock.tick(60)
+
+if __name__ == "__main__":
+    HungerGamesSim().run()

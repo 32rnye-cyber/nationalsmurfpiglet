@@ -1,0 +1,170 @@
+import pygame
+import sys
+import random
+
+# --- Initialization ---
+pygame.init()
+WIDTH, HEIGHT = 1000, 600
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("Neon Strike: Final Showdown")
+clock = pygame.time.Clock()
+font = pygame.font.SysFont("Impact", 50)
+
+# Colors
+WHITE, BLACK, RED, BLUE = (255, 255, 255), (10, 10, 20), (255, 50, 50), (50, 150, 255)
+GRAY, YELLOW, PURPLE = (50, 50, 70), (255, 255, 0), (100, 0, 150)
+
+# --- Procedural Background Generator ---
+# This creates a cool city without needing a 'bg.png' file
+def draw_neon_city():
+    screen.fill((15, 15, 35)) # Deep Space Blue
+    # Draw Stars
+    random.seed(42) # Keeps stars in the same spot
+    for _ in range(50):
+        sx, sy = random.randint(0, WIDTH), random.randint(0, 300)
+        pygame.draw.circle(screen, WHITE, (sx, sy), 1)
+    
+    # Draw Buildings
+    for i in range(15):
+        bx = i * 70
+        bh = 200 + (i % 3) * 50
+        # Building Body
+        pygame.draw.rect(screen, (25, 25, 45), (bx, HEIGHT - bh, 60, bh))
+        # Neon Windows
+        for wy in range(HEIGHT - bh + 10, HEIGHT - 60, 30):
+            pygame.draw.rect(screen, (60, 60, 100), (bx + 15, wy, 10, 10))
+            pygame.draw.rect(screen, (60, 60, 100), (bx + 35, wy, 10, 10))
+
+# --- Projectile Class ---
+class Projectile(pygame.sprite.Sprite):
+    def __init__(self, x, y, direction, color):
+        super().__init__()
+        self.image = pygame.Surface((25, 6))
+        self.image.fill(color)
+        self.rect = self.image.get_rect(center=(x, y))
+        self.speed = 15 * direction
+
+    def update(self):
+        self.rect.x += self.speed
+        if self.rect.right < 0 or self.rect.left > WIDTH:
+            self.kill()
+
+# --- Fighter Class ---
+class Fighter(pygame.sprite.Sprite):
+    def __init__(self, x, y, color, controls, direction, name):
+        super().__init__()
+        self.name = name
+        self.image = pygame.Surface((50, 100))
+        self.image.fill(color)
+        # Add a "visor" to the fighter so we know which way they face
+        pygame.draw.rect(self.image, WHITE, (35 if direction == 1 else 0, 20, 15, 10))
+        
+        self.rect = self.image.get_rect(center=(x, y))
+        self.color = color
+        self.controls = controls # [Left, Right, Jump, Shoot]
+        self.direction = direction
+        
+        self.vel_y = 0
+        self.speed = 8
+        self.hp = 100
+        self.is_jumping = False
+        self.cooldown = 0
+
+    def move(self):
+        keys = pygame.key.get_pressed()
+        if keys[self.controls[0]] and self.rect.left > 0: self.rect.x -= self.speed
+        if keys[self.controls[1]] and self.rect.right < WIDTH: self.rect.x += self.speed
+        
+        if keys[self.controls[2]] and not self.is_jumping:
+            self.vel_y = -20
+            self.is_jumping = True
+
+        self.vel_y += 1.2 # Gravity
+        self.rect.y += self.vel_y
+
+        if self.rect.bottom > HEIGHT - 50:
+            self.rect.bottom = HEIGHT - 50
+            self.is_jumping = False
+            self.vel_y = 0
+
+    def shoot(self, projectile_group, all_sprites_group):
+        keys = pygame.key.get_pressed()
+        if self.cooldown > 0: self.cooldown -= 1
+        
+        if keys[self.controls[3]] and self.cooldown == 0:
+            bx = self.rect.right if self.direction == 1 else self.rect.left
+            bullet = Projectile(bx, self.rect.centery, self.direction, YELLOW)
+            projectile_group.add(bullet)
+            all_sprites_group.add(bullet)
+            self.cooldown = 20 
+
+    def draw_health(self, x, y):
+        # Health Bar Background
+        pygame.draw.rect(screen, (50, 50, 50), (x, y, 200, 30))
+        # Actual Health
+        pygame.draw.rect(screen, self.color, (x, y, self.hp * 2, 30))
+        # Border
+        pygame.draw.rect(screen, WHITE, (x, y, 200, 30), 3)
+
+# --- Setup ---
+p1 = Fighter(200, 500, BLUE, [pygame.K_a, pygame.K_d, pygame.K_w, pygame.K_SPACE], 1, "PLAYER 1")
+p2 = Fighter(800, 500, RED, [pygame.K_LEFT, pygame.K_RIGHT, pygame.K_UP, pygame.K_RETURN], -1, "PLAYER 2")
+
+all_sprites = pygame.sprite.Group(p1, p2)
+p1_projectiles = pygame.sprite.Group()
+p2_projectiles = pygame.sprite.Group()
+
+winner = ""
+
+# --- Main Loop ---
+while True:
+    # 1. Draw the "Cool" Background (Built-in)
+    draw_neon_city()
+
+    # 2. Exit Logic
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            pygame.quit()
+            sys.exit()
+
+    # 3. Game Logic
+    if winner == "":
+        p1.move()
+        p2.move()
+        p1.shoot(p1_projectiles, all_sprites)
+        p2.shoot(p2_projectiles, all_sprites)
+        p1_projectiles.update()
+        p2_projectiles.update()
+
+        # Collisions
+        for b in p1_projectiles:
+            if b.rect.colliderect(p2.rect):
+                p2.hp -= 10
+                b.kill()
+        for b in p2_projectiles:
+            if b.rect.colliderect(p1.rect):
+                p1.hp -= 10
+                b.kill()
+
+        if p1.hp <= 0: winner = "PLAYER 2 WINS!"
+        if p2.hp <= 0: winner = "PLAYER 1 WINS!"
+
+    # 4. Draw Floor
+    pygame.draw.rect(screen, (20, 20, 30), (0, HEIGHT - 50, WIDTH, 50))
+    pygame.draw.rect(screen, PURPLE, (0, HEIGHT - 50, WIDTH, 5), 2) # Neon Floor Line
+
+    # 5. Draw Everything
+    all_sprites.draw(screen)
+    p1_projectiles.draw(screen)
+    p2_projectiles.draw(screen)
+    
+    p1.draw_health(50, 40)
+    p2.draw_health(750, 40)
+
+    if winner:
+        # Text Glow Effect
+        txt = font.render(winner, True, YELLOW)
+        screen.blit(txt, (WIDTH//2 - txt.get_width()//2, HEIGHT//2))
+
+    pygame.display.flip()
+    clock.tick(60)
